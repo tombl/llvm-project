@@ -430,7 +430,14 @@ void WebAssembly::addClangTargetOptions(const ArgList &DriverArgs,
     CC1Args.push_back("-exception-model=wasm");
   };
 
-  if (DriverArgs.getLastArg(options::OPT_fwasm_exceptions)) {
+  // Linux has no other unwinder: without wasm EH, the backend lowers every
+  // invoke to a call and C++ catch blocks never run. Make it the default
+  // unless the exception-handling feature is turned off.
+  bool DefaultWasmEH =
+      getTriple().isOSLinux() &&
+      DriverArgs.hasFlag(options::OPT_mexception_handing,
+                         options::OPT_mno_exception_handing, true);
+  if (DriverArgs.getLastArg(options::OPT_fwasm_exceptions) || DefaultWasmEH) {
     BanIncompatibleOptionsForWasmEHSjLj("-fwasm-exceptions");
     EnableFeaturesForWasmEHSjLj();
     // Backend needs -wasm-enable-eh to enable Wasm EH
