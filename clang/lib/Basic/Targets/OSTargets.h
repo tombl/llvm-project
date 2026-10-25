@@ -388,6 +388,12 @@ public:
     switch (Triple.getArch()) {
     default:
       break;
+    case llvm::Triple::wasm32:
+    case llvm::Triple::wasm64:
+      // As on every other wasm OS: catch blocks need the WebAssembly ABI's
+      // catchret scopes, and libc++abi assumes it whenever __wasm__ is set.
+      this->TheCXXABI.set(TargetCXXABI::WebAssembly);
+      break;
     case llvm::Triple::mips:
     case llvm::Triple::mipsel:
     case llvm::Triple::mips64:
