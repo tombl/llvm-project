@@ -96,6 +96,11 @@ public:
 
   // Predicates used by WebAssemblyInstrInfo.td.
   bool hasAddr64() const { return TargetTriple.isArch64Bit(); }
+  // wasm64 Linux gives every variadic argument at least an 8-byte slot, as
+  // x86-64 and AArch64 do, so word-sized va_arg reads stay in bounds.
+  bool hasWordSizedVarargSlots() const {
+    return TargetTriple.isArch64Bit() && TargetTriple.isOSLinux();
+  }
   bool hasAtomics() const { return HasAtomics; }
   bool hasBulkMemory() const { return HasBulkMemory; }
   bool hasBulkMemoryOpt() const { return HasBulkMemoryOpt; }

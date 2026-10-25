@@ -160,9 +160,13 @@ RValue WebAssemblyABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
   bool IsIndirect = isAggregateTypeForABI(Ty) &&
                     !isEmptyRecord(getContext(), Ty, true) &&
                     !isSingleElementStruct(Ty, getContext());
+  // wasm64 Linux matches the backend's 8-byte vararg slots (see
+  // WebAssemblySubtarget::hasWordSizedVarargSlots), like x86-64 and AArch64.
+  const llvm::Triple &T = getTarget().getTriple();
+  unsigned SlotSize = T.isArch64Bit() && T.isOSLinux() ? 8 : 4;
   return emitVoidPtrVAArg(CGF, VAListAddr, Ty, IsIndirect,
                           getContext().getTypeInfoInChars(Ty),
-                          CharUnits::fromQuantity(4),
+                          CharUnits::fromQuantity(SlotSize),
                           /*AllowHigherAlign=*/true, Slot);
 }
 

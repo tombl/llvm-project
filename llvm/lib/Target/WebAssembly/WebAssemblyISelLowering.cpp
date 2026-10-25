@@ -119,10 +119,12 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
   setOperationAction(ISD::BRIND, MVT::Other, Custom);
   setOperationAction(ISD::CLEAR_CACHE, MVT::Other, Custom);
 
-  // Take the default expansion for va_arg, va_copy, and va_end. There is no
-  // default action for va_start, so we do that custom.
+  // Take the default expansion for va_copy and va_end, and for va_arg except
+  // where vararg slots are word-sized. There is no default action for
+  // va_start, so we do that custom.
   setOperationAction(ISD::VASTART, MVT::Other, Custom);
-  setOperationAction(ISD::VAARG, MVT::Other, Expand);
+  setOperationAction(ISD::VAARG, MVT::Other,
+                     Subtarget->hasWordSizedVarargSlots() ? Custom : Expand);
   setOperationAction(ISD::VACOPY, MVT::Other, Expand);
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
 
@@ -1409,16 +1411,37 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
   if (IsVarArg) {
     // Outgoing non-fixed arguments are placed in a buffer. First
     // compute their offsets and the total amount of buffer space needed.
+    // wasm64 Linux gives each part at least an 8-byte slot aligned to 8, as
+    // x86-64 and AArch64 do, and widens narrower integers to fill it, so a
+    // callee may read any of them as a long.
+    bool WordSlots = Subtarget->hasWordSizedVarargSlots();
     for (unsigned I = NumFixedArgs; I < Outs.size(); ++I) {
       const ISD::OutputArg &Out = Outs[I];
       SDValue &Arg = OutVals[I];
+      if (WordSlots) {
+        // A vector split or widened into parts would not match the layout
+        // va_arg reads back.
+        if (Out.ArgVT.isVector() && Out.ArgVT != Arg.getValueType())
+          fail(DL, DAG,
+               "WebAssembly hasn't implemented legalized vector "
+               "varargs on wasm64 Linux");
+        if (Arg.getValueType().isScalarInteger() &&
+            Arg.getValueType().bitsLT(MVT::i64))
+          Arg = DAG.getNode(Out.Flags.isSExt() ? ISD::SIGN_EXTEND
+                                               : ISD::ZERO_EXTEND,
+                            DL, MVT::i64, Arg);
+      }
       EVT VT = Arg.getValueType();
       assert(VT != MVT::iPTR && "Legalized args should be concrete");
       Type *Ty = VT.getTypeForEVT(*DAG.getContext());
       Align Alignment =
           std::max(Out.Flags.getNonZeroOrigAlign(), Layout.getABITypeAlign(Ty));
-      unsigned Offset =
-          CCInfo.AllocateStack(Layout.getTypeAllocSize(Ty), Alignment);
+      uint64_t Size = Layout.getTypeAllocSize(Ty);
+      if (WordSlots) {
+        Alignment = std::max(Alignment, Align(8));
+        Size = alignTo(Size, 8);
+      }
+      unsigned Offset = CCInfo.AllocateStack(Size, Alignment);
       CCInfo.addLoc(CCValAssign::getMem(ArgLocs.size(), VT.getSimpleVT(),
                                         Offset, VT.getSimpleVT(),
                                         CCValAssign::Full));
@@ -1710,6 +1733,8 @@ SDValue WebAssemblyTargetLowering::LowerOperation(SDValue Op,
     return LowerBR_JT(Op, DAG);
   case ISD::VASTART:
     return LowerVASTART(Op, DAG);
+  case ISD::VAARG:
+    return LowerVAARG(Op, DAG);
   case ISD::BlockAddress:
   case ISD::BRIND:
     fail(DL, DAG, "WebAssembly hasn't implemented computed gotos");
@@ -2149,6 +2174,43 @@ SDValue WebAssemblyTargetLowering::LowerBR_JT(SDValue Op,
   // if possible by WebAssemblyFixBrTableDefaults.
   Ops.push_back(DAG.getBasicBlock(*MBBs.begin()));
   return DAG.getNode(WebAssemblyISD::BR_TABLE, DL, MVT::Other, Ops);
+}
+
+// With word-sized vararg slots, each argument starts on an 8-byte boundary
+// (or its own alignment when larger) and the list advances by its size
+// rounded up to 8.
+SDValue WebAssemblyTargetLowering::LowerVAARG(SDValue Op,
+                                              SelectionDAG &DAG) const {
+  SDNode *Node = Op.getNode();
+  EVT VT = Node->getValueType(0);
+  SDValue Chain = Node->getOperand(0);
+  SDValue VAListPtr = Node->getOperand(1);
+  const Value *SV = cast<SrcValueSDNode>(Node->getOperand(2))->getValue();
+  const DataLayout &Layout = DAG.getDataLayout();
+  EVT PtrVT = getPointerTy(Layout);
+  SDLoc DL(Node);
+
+  SDValue VAList =
+      DAG.getLoad(PtrVT, DL, Chain, VAListPtr, MachinePointerInfo(SV));
+  Chain = VAList.getValue(1);
+
+  Type *Ty = VT.getTypeForEVT(*DAG.getContext());
+  Align Alignment = std::max(Align(8), Layout.getABITypeAlign(Ty));
+  if (uint64_t A = Node->getConstantOperandVal(3))
+    Alignment = std::max(Alignment, Align(A));
+  if (Alignment > Align(8)) {
+    VAList = DAG.getNode(ISD::ADD, DL, PtrVT, VAList,
+                         DAG.getConstant(Alignment.value() - 1, DL, PtrVT));
+    VAList = DAG.getNode(
+        ISD::AND, DL, PtrVT, VAList,
+        DAG.getSignedConstant(-(int64_t)Alignment.value(), DL, PtrVT));
+  }
+
+  uint64_t Size = alignTo(Layout.getTypeAllocSize(Ty), 8);
+  SDValue Next = DAG.getNode(ISD::ADD, DL, PtrVT, VAList,
+                             DAG.getConstant(Size, DL, PtrVT));
+  Chain = DAG.getStore(Chain, DL, Next, VAListPtr, MachinePointerInfo(SV));
+  return DAG.getLoad(VT, DL, Chain, VAList, MachinePointerInfo());
 }
 
 SDValue WebAssemblyTargetLowering::LowerVASTART(SDValue Op,
