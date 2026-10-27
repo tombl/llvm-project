@@ -80,6 +80,12 @@ class LLVM_LIBRARY_VISIBILITY WebAssemblyTargetInfo : public TargetInfo {
 public:
   explicit WebAssemblyTargetInfo(const llvm::Triple &T, const TargetOptions &)
       : TargetInfo(T) {
+    // The OS wrappers for wasi, emscripten, WALI and bare wasm all select the
+    // WebAssembly C++ ABI, and libc++abi assumes it whenever __wasm__ is
+    // defined. LinuxTargetInfo chooses no ABI, which left wasm32-linux on
+    // generic Itanium: constructors don't return `this`, and catch bodies get
+    // no catchret, so leaving one traps. Set it here for every wasm target.
+    TheCXXABI.set(TargetCXXABI::WebAssembly);
     AddrSpaceMap = &WebAssemblyAddrSpaceMap;
     NoAsmVariants = true;
     SuitableAlign = 128;
