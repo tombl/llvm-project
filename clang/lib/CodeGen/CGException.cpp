@@ -141,6 +141,10 @@ static const EHPersonality &getCPersonality(const TargetInfo &Target,
     return EHPersonality::GNU_C;
   if (CGOpts.hasSEHExceptions())
     return EHPersonality::GNU_C_SEH;
+  // The wasm backend only lowers funclet-based EH. C cleanups never consult
+  // the personality, so the C++ one costs nothing at link time.
+  if (CGOpts.hasWasmExceptions())
+    return EHPersonality::GNU_Wasm_CPlusPlus;
   return EHPersonality::GNU_C;
 }
 

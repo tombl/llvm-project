@@ -493,8 +493,7 @@ WebAssembly::GetCXXStdlibType(const ArgList &Args) const {
       getDriver().Diag(diag::err_drv_invalid_stdlib_name)
           << A->getAsString(Args);
   }
-  if (getTriple().isOSLinux())
-    return ToolChain::CST_Libstdcxx;
+  // libc++ is the only C++ library built for wasm, Linux included.
   return ToolChain::CST_Libcxx;
 }
 
